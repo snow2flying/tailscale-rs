@@ -75,6 +75,10 @@ impl IpRange {
     /// let weird_range = IpRange::Range("1.2.3.4".parse()?..="2.3.4.5".parse()?);
     /// let pfxs = weird_range.iter_prefixes().collect::<Vec<_>>();
     /// assert_eq!(pfxs.len(), 24);
+    ///
+    /// // Wildcard expands to both the complete IPv4 and IPv6 ranges.
+    /// let pfxs = IpRange::Wildcard.iter_prefixes().collect::<Vec<_>>();
+    /// assert_eq!(pfxs, vec!["0.0.0.0/0".parse()?, "::/0".parse()?]);
     /// # Ok(())
     /// # }
     /// ```
@@ -83,7 +87,7 @@ impl IpRange {
             Self::Wildcard => Box::new(
                 [
                     Ipv4Net::new_assert(Ipv4Addr::UNSPECIFIED, 0).into(),
-                    Ipv6Net::new_assert(Ipv6Addr::UNSPECIFIED, 1).into(),
+                    Ipv6Net::new_assert(Ipv6Addr::UNSPECIFIED, 0).into(),
                 ]
                 .into_iter(),
             ) as Box<dyn Iterator<Item = IpNet>>,
