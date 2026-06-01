@@ -84,12 +84,28 @@ jobs:
             ts_elixir/deps/
           key: ${{ matrix.platform.triple }}-mix-${{ env.cache_key }}-elixir-${{ matrix.elixir.version }}-otp-${{ matrix.otp.version }}-${{ hashFiles('**/mix.lock') }}
 
+      # The setup-beam action uses the `ImageOS` env var to select the dependency bundle to
+      # download from Hex, and so it needs to be one of a few blessed values. GitHub seems
+      # to have changed how they set this variable recently, including `-arm` for aarch64
+      # linux. This broke `setup-beam`, so we put it back how it was here and restore
+      # afterwards.
+      - name: Override ImageOS
+        if: ${{ matrix.platform.runner == 'linux-arm64-16cpu' }}
+        run: |-
+          echo ImageOSPrev="$ImageOS" >> $GITHUB_ENV
+          echo ImageOS=ubuntu24 >> $GITHUB_ENV
+
       - name: Install elixir
         id: install-elixir
         uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # 1.24.0
         with:
           otp-version: ${{ matrix.otp.version }}
           elixir-version: ${{ matrix.elixir.version }}
+
+      - name: Restore ImageOS
+        if: ${{ matrix.platform.runner == 'linux-arm64-16cpu' }}
+        run: |-
+          echo ImageOS="$ImageOSPrev" >> $GITHUB_ENV
 
       - name: Setup rust
         id: setup-rust
