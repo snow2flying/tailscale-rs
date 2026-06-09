@@ -26,13 +26,13 @@ pub struct Plaintext {
 }
 
 impl Plaintext {
-    pub const VERSION: u8 = 0;
+    const VERSION: u8 = 0;
 
-    pub fn ty(&self) -> Option<MessageType> {
+    fn ty(&self) -> Option<MessageType> {
         self.ty.try_into().ok()
     }
 
-    pub const fn size_for_message(payload_size: usize) -> usize {
+    const fn size_for_message(payload_size: usize) -> usize {
         2 + payload_size
     }
 }
