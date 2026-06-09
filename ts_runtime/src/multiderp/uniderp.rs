@@ -12,6 +12,7 @@ use kameo::{
 use smol_str::SmolStr;
 use tokio::sync::{Mutex, watch};
 use ts_control::DerpRegion;
+use ts_dataplane::async_tokio::{FromUnderlay, Rx, ToUnderlay, Tx};
 use ts_derp::RegionId;
 use ts_keys::{NodeKeyPair, NodePublicKey};
 use ts_packet::PacketMut;
@@ -21,7 +22,7 @@ use ts_transport::{
 
 use crate::{
     Task,
-    dataplane::{DataplaneActor, NewUnderlayTransport, UnderlayFromDataplane, UnderlayToDataplane},
+    dataplane::{DataplaneActor, NewUnderlayTransport},
     derp_latency::DerpLatencyMeasurement,
     env::Env,
     multiderp::{Multiderp, SetRegionTransportId},
@@ -221,8 +222,8 @@ struct Runner {
     region_id: RegionId,
     region: DerpRegion,
     home_derp_rx: watch::Receiver<bool>,
-    to_dataplane: UnderlayToDataplane,
-    from_dataplane: Arc<Mutex<UnderlayFromDataplane>>,
+    to_dataplane: Tx<FromUnderlay>,
+    from_dataplane: Arc<Mutex<Rx<ToUnderlay>>>,
     peer_db: Arc<RwLock<Option<Arc<PeerDb>>>>,
     keys: NodeKeyPair,
 }
@@ -306,7 +307,7 @@ impl Runner {
 
                         tracing::trace!(parent: &span, %peer_id, len = pkts.len(), "packet from derp server");
 
-                        let Ok(()) = self.to_dataplane.send((peer_id, pkts)) else {
+                        let Ok(()) = self.to_dataplane.send(pkts) else {
                             tracing::error!(parent: &span, "underlay receive channel closed");
                             break;
                         };
