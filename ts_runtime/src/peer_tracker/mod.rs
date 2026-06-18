@@ -167,7 +167,7 @@ mod msg_impl {
 
 pub use msg_impl::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PeerState {
     #[allow(unused)]
     pub deletions: HashSet<PeerId>,
