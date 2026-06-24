@@ -10,11 +10,61 @@ use ts_overlay_router::{
 };
 use ts_transport::{OverlayTransportId, PeerId, UnderlayTransportId};
 
-use crate::{Error, env::Env, multiderp, multiderp::Multiderp, peer_tracker::PeerState};
+use crate::{Error, env::Env, multiderp::DerpTransportMap, peer_tracker::PeerState};
 
 pub struct RouteUpdater {
     default_overlay_transport: OverlayTransportId,
+    derp_transport_map: DerpTransportMap,
+    peer_state: Arc<PeerState>,
     env: Env,
+}
+
+impl RouteUpdater {
+    fn build_routes(&self) -> PeerRoutesInner {
+        tracing::trace!(
+            n_peers = self.peer_state.peers.peers().len(),
+            "reconstructing routes for peer update"
+        );
+
+        let mut overlay_out = ts_bart::Table::default();
+        let mut underlay_out = HashMap::default();
+
+        for (id, peer) in self.peer_state.peers.peers() {
+            let span = tracing::trace_span!(
+                "peer_update",
+                peer_key = %peer.node_key,
+                region = ?peer.derp_region,
+                underlay_transport = tracing::field::Empty,
+                peer_id = ?id,
+            )
+            .entered();
+
+            let Some(region) = peer.derp_region else {
+                continue;
+            };
+
+            match self.derp_transport_map.0.get(&region) {
+                Some(&transport_id) => {
+                    span.record("underlay_transport", tracing::field::debug(transport_id));
+                    underlay_out.insert(*id, transport_id);
+                }
+                None => {
+                    tracing::error!("no region stored in multiderp, no underlay route");
+                }
+            }
+
+            tracing::trace!(routes = ?peer.accepted_routes);
+
+            for route in &peer.accepted_routes {
+                overlay_out.insert(*route, OutboundRouteAction::Wireguard(*id));
+            }
+        }
+
+        PeerRoutesInner {
+            underlay_routes: underlay_out,
+            overlay_out_routes: overlay_out,
+        }
+    }
 }
 
 impl kameo::Actor for RouteUpdater {
@@ -27,11 +77,14 @@ impl kameo::Actor for RouteUpdater {
     ) -> Result<Self, Self::Error> {
         env.subscribe::<Arc<PeerState>>(&slf).await?;
         env.subscribe::<Arc<ts_control::StateUpdate>>(&slf).await?;
+        env.subscribe::<DerpTransportMap>(&slf).await?;
 
         env.register(None, &slf).await?;
 
         Ok(Self {
             default_overlay_transport: default_transport,
+            derp_transport_map: DerpTransportMap::default(),
+            peer_state: Default::default(),
             env,
         })
     }
@@ -56,62 +109,39 @@ impl Message<Arc<PeerState>> for RouteUpdater {
     type Reply = ();
 
     async fn handle(&mut self, msg: Arc<PeerState>, _ctx: &mut Context<Self, Self::Reply>) {
-        tracing::trace!(
-            n_peers = msg.peers.peers().len(),
-            "reconstructing routes for peer update"
-        );
+        self.peer_state = msg;
 
-        let mut overlay_out = ts_bart::Table::default();
-        let mut underlay_out = HashMap::default();
-
-        for (id, peer) in msg.peers.peers() {
-            let span = tracing::trace_span!(
-                "peer_update",
-                peer_key = %peer.node_key,
-                region = ?peer.derp_region,
-                underlay_transport = tracing::field::Empty,
-                peer_id = ?id,
-            );
-
-            let Some(region) = peer.derp_region else {
-                tracing::trace!(parent: &span, "peer has no derp region");
-                continue;
-            };
-
-            tracing::trace!(parent: &span, "ask multiderp for transport id");
-
-            match self
-                .env
-                .ask::<Multiderp, _>(None, multiderp::TransportIdForRegion { id: region }, true)
-                .await
-            {
-                Ok(Some(transport_id)) => {
-                    span.record("underlay_transport", tracing::field::debug(transport_id));
-                    underlay_out.insert(*id, transport_id);
-                    tracing::trace!(parent: &span, "set underlay route");
-                }
-                Ok(None) => {
-                    tracing::error!(parent: &span, "no region stored in multiderp, no underlay route");
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "multiderp unavailable");
-                }
-            }
-
-            for route in &peer.accepted_routes {
-                tracing::trace!(parent: &span, %route, "routes");
-
-                overlay_out.insert(*route, OutboundRouteAction::Wireguard(*id));
-            }
-        }
+        let new_routes = self.build_routes();
 
         if let Err(e) = self
             .env
             .publish(PeerRouteUpdate {
-                inner: Arc::new(PeerRoutesInner {
-                    underlay_routes: underlay_out,
-                    overlay_out_routes: overlay_out,
-                }),
+                inner: Arc::new(new_routes),
+            })
+            .await
+        {
+            tracing::error!(error = %e, "publishing peer route update");
+        }
+    }
+}
+
+impl Message<DerpTransportMap> for RouteUpdater {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: DerpTransportMap, _ctx: &mut Context<Self, Self::Reply>) {
+        if msg.0 == self.derp_transport_map.0 {
+            return;
+        }
+
+        tracing::debug!("derp transport map changed, building new routes");
+
+        self.derp_transport_map = msg;
+
+        let new_routes = self.build_routes();
+        if let Err(e) = self
+            .env
+            .publish(PeerRouteUpdate {
+                inner: Arc::new(new_routes),
             })
             .await
         {
