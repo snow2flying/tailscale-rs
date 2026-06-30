@@ -292,6 +292,7 @@
           cargo-audit
           cargo-deny
           cargo-nextest
+          cargo-machete
 
           repo_toolchain
 
